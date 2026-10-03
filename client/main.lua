@@ -1,11 +1,12 @@
--- uhsdk client: screenshots via screenshot-basic, uploaded straight to the API
+-- UHost R2 SDK (client): screenshots via screenshot-basic, uploaded straight to the API
 -- with one-time URLs issued by the server (the API key never reaches clients).
 
+local RESOURCE = GetCurrentResourceName()
 local pendingRpc = {}
 local rpcCounter = 0
 
 local function fail(message)
-    error('uhsdk: ' .. message, 0)
+    error(RESOURCE .. ': ' .. message, 0)
 end
 
 local function isCallable(value)
@@ -19,17 +20,17 @@ local function rpc(action, payload)
     local p = promise.new()
     pendingRpc[requestId] = p
 
-    TriggerServerEvent('uhsdk:rpc', requestId, action, payload)
+    TriggerServerEvent(RESOURCE .. ':rpc', requestId, action, payload)
     SetTimeout(Config.RpcTimeoutMs, function()
         if pendingRpc[requestId] then
             pendingRpc[requestId] = nil
-            p:reject('uhsdk: server did not respond')
+            p:reject(RESOURCE .. ': server did not respond')
         end
     end)
     return Citizen.Await(p)
 end
 
-RegisterNetEvent('uhsdk:rpc:result', function(requestId, ok, result)
+RegisterNetEvent(RESOURCE .. ':rpc:result', function(requestId, ok, result)
     local p = pendingRpc[requestId]
     if not p then return end
     pendingRpc[requestId] = nil
@@ -50,17 +51,17 @@ local function screenshotUpload(url, options)
             p:resolve(resp.data)
         else
             local message = ok and type(resp) == 'table' and resp.error or text
-            p:reject('uhsdk: screenshot upload failed: ' .. tostring(message))
+            p:reject(RESOURCE .. ': screenshot upload failed: ' .. tostring(message))
         end
     end)
     return Citizen.Await(p)
 end
 
 -- Server-initiated capture (takeServerImage)
-RegisterNetEvent('uhsdk:capture', function(requestId, url, options)
+RegisterNetEvent(RESOURCE .. ':capture', function(requestId, url, options)
     CreateThread(function()
         local ok, err = pcall(screenshotUpload, url, options)
-        TriggerServerEvent('uhsdk:captureDone', requestId, (not ok) and tostring(err) or nil)
+        TriggerServerEvent(RESOURCE .. ':captureDone', requestId, (not ok) and tostring(err) or nil)
     end)
 end)
 

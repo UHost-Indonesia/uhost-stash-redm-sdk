@@ -1,7 +1,8 @@
--- uhsdk server: talks to the UHost R2 game API (/api/v3/file).
+-- UHost R2 SDK (server): talks to the UHost R2 game API (/api/v3/file).
 -- The API key lives only here (convar "uhost_api_key"); clients upload through
 -- one-time presigned URLs and never see it.
 
+local RESOURCE = GetCurrentResourceName()
 local FILE_TYPES = { image = true, video = true, audio = true }
 local B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -10,11 +11,11 @@ local lastClientRequest = {}
 local captureCounter = 0
 
 local function debugLog(...)
-    if Config.Debug then print('^5[uhsdk]^7', ...) end
+    if Config.Debug then print('^5[' .. RESOURCE .. ']^7', ...) end
 end
 
 local function fail(message)
-    error('uhsdk: ' .. message, 0)
+    error(RESOURCE .. ': ' .. message, 0)
 end
 
 -- ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ local function httpRequest(method, path, query, body, headers)
             p:resolve(data or {})
         else
             local message = (data and data.error) or errorData or ('HTTP ' .. tostring(status))
-            p:reject(('uhsdk: %s %s failed (%s): %s'):format(method, path, tostring(status), tostring(message)))
+            p:reject((RESOURCE .. ': %s %s failed (%s): %s'):format(method, path, tostring(status), tostring(message)))
         end
     end, method, body or '', headers)
     return Citizen.Await(p)
@@ -209,7 +210,7 @@ local function takeServerImage(playerSource, metadata, options, timeout)
     local p = promise.new()
     pendingCaptures[requestId] = { source = src, promise = p }
 
-    TriggerClientEvent('uhsdk:capture', src, requestId, presigned.presignedUrl, {
+    TriggerClientEvent(RESOURCE .. ':capture', src, requestId, presigned.presignedUrl, {
         encoding = options.encoding,
         quality = options.quality,
     })
@@ -217,7 +218,7 @@ local function takeServerImage(playerSource, metadata, options, timeout)
     SetTimeout(timeout or Config.Screenshot.timeoutMs, function()
         if pendingCaptures[requestId] then
             pendingCaptures[requestId] = nil
-            p:reject('uhsdk: screenshot request timed out')
+            p:reject(RESOURCE .. ': screenshot request timed out')
         end
     end)
 
@@ -282,14 +283,14 @@ export('deleteFile', deleteFile)
 -- Client bridge
 -- ---------------------------------------------------------------------------
 
-RegisterNetEvent('uhsdk:captureDone', function(requestId, err)
+RegisterNetEvent(RESOURCE .. ':captureDone', function(requestId, err)
     local src = source
     local entry = pendingCaptures[requestId]
     -- Only the player that was asked may answer
     if not entry or entry.source ~= src then return end
     pendingCaptures[requestId] = nil
     if err then
-        entry.promise:reject('uhsdk: ' .. tostring(err):sub(1, 200))
+        entry.promise:reject(RESOURCE .. ': ' .. tostring(err):sub(1, 200))
     else
         entry.promise:resolve(true)
     end
@@ -310,22 +311,22 @@ local clientActions = {
     end,
 }
 
-RegisterNetEvent('uhsdk:rpc', function(requestId, action, payload)
+RegisterNetEvent(RESOURCE .. ':rpc', function(requestId, action, payload)
     local src = source
     CreateThread(function()
         local now = GetGameTimer()
         local handler = clientActions[action]
         local ok, result
         if not handler then
-            ok, result = false, 'uhsdk: unknown action'
+            ok, result = false, RESOURCE .. ': unknown action'
         elseif lastClientRequest[src] and now - lastClientRequest[src] < Config.ClientCooldownMs then
-            ok, result = false, 'uhsdk: too many requests, try again shortly'
+            ok, result = false, RESOURCE .. ': too many requests, try again shortly'
         else
             lastClientRequest[src] = now
             ok, result = pcall(handler, src, type(payload) == 'table' and payload or {})
         end
         if not ok then debugLog(('client %d %s failed: %s'):format(src, tostring(action), tostring(result))) end
-        TriggerClientEvent('uhsdk:rpc:result', src, requestId, ok, ok and result or tostring(result))
+        TriggerClientEvent(RESOURCE .. ':rpc:result', src, requestId, ok, ok and result or tostring(result))
     end)
 end)
 
@@ -335,9 +336,9 @@ end)
 
 CreateThread(function()
     if GetConvar('uhost_api_key', '') == '' then
-        print('^3[uhsdk] Warning: set "uhost_api_key" in server.cfg (set uhost_api_key "r2u_...")^7')
+        print('^3[' .. RESOURCE .. '] Warning: set "uhost_api_key" in server.cfg (set uhost_api_key "r2u_...")^7')
     end
     if not screenshotBasicReady() then
-        print('^3[uhsdk] screenshot-basic is not running: takeImage/takeServerImage will not work^7')
+        print('^3[' .. RESOURCE .. '] screenshot-basic is not running: takeImage/takeServerImage will not work^7')
     end
 end)

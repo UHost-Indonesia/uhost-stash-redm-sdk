@@ -11,12 +11,12 @@ Resource Lua untuk upload **screenshot, video, dan audio** dari server RedM ke *
 
 1. Di dashboard [r2.uhost.id](https://r2.uhost.id), buat bucket. Disarankan tipe **Static / CDN** supaya file tersusun per folder: `screenshots/`, `videos/`, `audio/`.
 2. Buka **API Keys** → **Create key**, lalu pilih bucket tadi supaya key terikat ke bucket itu.
-3. Download repo ini ([ZIP](https://github.com/UHost-Indonesia/uhost-r2-redm-sdk/archive/refs/heads/main.zip) atau `git clone`), lalu letakkan di folder `resources/` dengan nama folder **`uhsdk`**. Nama folder menentukan nama export (`exports.uhsdk`).
+3. Download repo ini ([ZIP](https://github.com/UHost-Indonesia/uhost-r2-redm-sdk/archive/refs/heads/main.zip) atau `git clone`), lalu letakkan di folder `resources/` dengan nama folder **`uhost-r2-redm-sdk`**. Nama folder menentukan nama export (`exports['uhost-r2-redm-sdk']`).
 4. Tambahkan ke `server.cfg`:
 
 ```cfg
 ensure screenshot-basic
-ensure uhsdk
+ensure uhost-r2-redm-sdk
 
 set uhost_api_key "r2u_xxxxxxxxxxxxxxxxxxxxxxxx"
 set uhost_api_url "https://r2.uhost.id"
@@ -41,7 +41,7 @@ Ambil screenshot layar pemain, misalnya untuk anticheat atau laporan.
 
 ```lua
 local ok, res = pcall(function()
-    return exports.uhsdk:takeServerImage(source, { reason = 'report #12' })
+    return exports['uhost-r2-redm-sdk']:takeServerImage(source, { reason = 'report #12' })
 end)
 if ok then
     print('Screenshot: ' .. res.url)
@@ -55,7 +55,7 @@ end
 Mode callback:
 
 ```lua
-exports.uhsdk:takeServerImage(source, nil, nil, nil, function(res, err)
+exports['uhost-r2-redm-sdk']:takeServerImage(source, nil, nil, nil, function(res, err)
     if err then return print(err) end
     print(res.url)
 end)
@@ -64,7 +64,7 @@ end)
 JavaScript:
 
 ```js
-const res = await exports.uhsdk.takeServerImage(source, { reason: "anticheat" });
+const res = await exports['uhost-r2-redm-sdk'].takeServerImage(source, { reason: "anticheat" });
 console.log(res.url);
 ```
 
@@ -73,7 +73,7 @@ console.log(res.url);
 Upload dari server. `data` boleh berupa data URI (`data:image/png;base64,...`), string base64, atau byte mentah.
 
 ```lua
-local res = exports.uhsdk:uploadImage(dataUri, {
+local res = exports['uhost-r2-redm-sdk']:uploadImage(dataUri, {
     fileName = 'evidence.png', -- opsional; di bucket static menjadi nama file persis
     path = 'evidence',         -- opsional; folder (bucket static)
     metadata = { case = 7 },
@@ -86,7 +86,7 @@ Menghasilkan URL upload sekali pakai (berlaku 15 menit) untuk `'image'`, `'video
 Kirim URL-nya ke NUI, lalu NUI meng-upload langsung tanpa API key.
 
 ```lua
-local url = exports.uhsdk:requestPresignedUrl('video', {
+local url = exports['uhost-r2-redm-sdk']:requestPresignedUrl('video', {
     metadata = { clip = 'heist' },
     expiresIn = 600, -- detik, opsional
 })
@@ -95,10 +95,10 @@ local url = exports.uhsdk:requestPresignedUrl('video', {
 ### `getFile(idOrKey)`, `listFiles(query?)`, `deleteFile(idOrKey)`
 
 ```lua
-local file = exports.uhsdk:getFile('screenshots/ABCD1234.webp')
-local page = exports.uhsdk:listFiles({ type = 'image', path = 'screenshots', page = 1, limit = 50 })
+local file = exports['uhost-r2-redm-sdk']:getFile('screenshots/ABCD1234.webp')
+local page = exports['uhost-r2-redm-sdk']:listFiles({ type = 'image', path = 'screenshots', page = 1, limit = 50 })
 -- page.data = list file, page.pagination = { page, limit, total }
-exports.uhsdk:deleteFile(file.id)
+exports['uhost-r2-redm-sdk']:deleteFile(file.id)
 ```
 
 ## Export client
@@ -109,7 +109,7 @@ Pemain mengambil screenshot sendiri, misalnya untuk kamera, foto profil, atau bu
 
 ```lua
 CreateThread(function()
-    local res = exports.uhsdk:takeImage({ app = 'camera' })
+    local res = exports['uhost-r2-redm-sdk']:takeImage({ app = 'camera' })
     print(res.url)
 end)
 ```
@@ -123,7 +123,7 @@ Untuk NUI yang merekam video/audio sendiri (misalnya `MediaRecorder`). File sela
 RegisterNUICallback('getUploadUrl', function(data, cb)
     CreateThread(function()
         local ok, url = pcall(function()
-            return exports.uhsdk:requestPresignedUrl(data.fileType)
+            return exports['uhost-r2-redm-sdk']:requestPresignedUrl(data.fileType)
         end)
         cb(ok and { url = url } or { error = url })
     end)
@@ -175,3 +175,7 @@ Respons upload: `{ "status": "ok", "data": { "id": "...", "url": "https://..." }
 
 - Maksimum ukuran per file mengikuti server UHost R2 (default 500 MB). Lewat Cloudflare, satu request dibatasi 100 MB.
 - Rate limit per API key default 60 request/menit. Hubungi admin UHost kalau server kamu sering mengambil screenshot.
+
+## Lisensi
+
+[MIT](LICENSE) © UHost Indonesia
