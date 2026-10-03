@@ -143,6 +143,168 @@ const res = await fetch(url, { method: "POST", body: form }).then((r) => r.json(
 console.log(res.data.url);
 ```
 
+## Contoh integrasi
+
+SDK ini adalah resource "library": ia tidak punya fitur yang terlihat pemain, tapi menyediakan export yang dipanggil resource lain. Semua contoh di bawah ditulis di **resource kamu sendiri**.
+
+### 1. Hubungkan resource kamu ke SDK
+
+Tambahkan dependency di `fxmanifest.lua` resource kamu supaya SDK selalu start lebih dulu:
+
+```lua
+dependency 'uhost-r2-redm-sdk'
+```
+
+Supaya pemanggilan lebih ringkas, simpan export-nya ke variabel lokal:
+
+```lua
+local R2 = exports['uhost-r2-redm-sdk']
+```
+
+### 2. Report pemain + bukti screenshot (server)
+
+Saat pemain membuat report, server mengambil screenshot layar pemain itu dan menyimpan link-nya.
+
+```lua
+local R2 = exports['uhost-r2-redm-sdk']
+
+RegisterCommand('report', function(source, args)
+    local reason = table.concat(args, ' ')
+    if reason == '' then return end
+
+    local ok, res = pcall(function()
+        return R2:takeServerImage(source, { reason = reason }, { path = 'reports' })
+    end)
+
+    if not ok then
+        print(('Report dari %s gagal mengambil screenshot: %s'):format(GetPlayerName(source), res))
+        return
+    end
+
+    -- Simpan ke database / kirim ke panel admin
+    print(('Report dari %s: %s\nBukti: %s'):format(GetPlayerName(source), reason, res.url))
+end, false)
+```
+
+### 3. Screenshot otomatis untuk anticheat (server)
+
+Ambil bukti sebelum mengambil tindakan. Mode callback cocok kalau tidak ingin memblok thread.
+
+```lua
+local R2 = exports['uhost-r2-redm-sdk']
+
+AddEventHandler('myanticheat:detected', function(playerId, detection)
+    R2:takeServerImage(playerId, { detection = detection }, { path = 'anticheat' }, 10000, function(res, err)
+        local evidence = res and res.url or ('tidak ada screenshot: ' .. tostring(err))
+        print(('[anticheat] %s terdeteksi %s | %s'):format(GetPlayerName(playerId), detection, evidence))
+        -- DropPlayer(playerId, 'Cheat terdeteksi')
+    end)
+end)
+```
+
+### 4. Kamera / foto oleh pemain (client → server)
+
+Pemain mengambil foto dari layarnya sendiri, lalu link-nya dikirim ke server untuk disimpan.
+
+```lua
+-- client.lua
+local R2 = exports['uhost-r2-redm-sdk']
+
+RegisterCommand('foto', function()
+    CreateThread(function()
+        local ok, res = pcall(function()
+            return R2:takeImage({ app = 'camera' })
+        end)
+        if ok then
+            TriggerServerEvent('mycamera:savePhoto', res.url)
+        else
+            print('Gagal mengambil foto: ' .. res)
+        end
+    end)
+end)
+```
+
+```lua
+-- server.lua
+RegisterNetEvent('mycamera:savePhoto', function(url)
+    local src = source
+    -- Hanya terima link dari UHost R2
+    if type(url) ~= 'string' or not url:find('^https://r2%.uhost%.id/') then return end
+    print(('%s menyimpan foto: %s'):format(GetPlayerName(src), url))
+end)
+```
+
+### 5. Poster buronan untuk sheriff (server)
+
+Ambil foto pemain untuk poster *wanted* dan simpan di folder terpisah. Tambahkan pengecekan job/izin sesuai framework kamu (VORP, RSG, RedEM:RP, dan lainnya).
+
+```lua
+local R2 = exports['uhost-r2-redm-sdk']
+
+RegisterNetEvent('mysheriff:createWanted', function(targetId, bounty)
+    local sheriff = source
+    -- if not isSheriff(sheriff) then return end   -- cek job sesuai framework kamu
+
+    local ok, res = pcall(function()
+        return R2:takeServerImage(targetId, { bounty = bounty, sheriff = GetPlayerName(sheriff) }, { path = 'wanted' })
+    end)
+    if ok then
+        TriggerClientEvent('mysheriff:posterCreated', -1, GetPlayerName(targetId), bounty, res.url)
+    end
+end)
+```
+
+### 6. Simpan link ke database (oxmysql)
+
+```lua
+local R2 = exports['uhost-r2-redm-sdk']
+
+local function savePhoto(playerId, identifier)
+    local res = R2:takeServerImage(playerId, nil, { path = 'photos' })
+    MySQL.insert.await('INSERT INTO player_photos (identifier, url, file_id) VALUES (?, ?, ?)', {
+        identifier, res.url, res.id,
+    })
+    return res.url
+end
+
+-- Hapus juga file-nya di UHost R2 saat datanya dihapus
+local function deletePhoto(fileId)
+    exports['uhost-r2-redm-sdk']:deleteFile(fileId)
+    MySQL.update.await('DELETE FROM player_photos WHERE file_id = ?', { fileId })
+end
+```
+
+### 7. Rekam video / voice note dari NUI
+
+Alurnya: NUI meminta URL upload ke client script, client script memanggil `requestPresignedUrl`, lalu NUI meng-upload hasil rekaman langsung ke UHost R2. Contoh lengkapnya ada di bagian [`requestPresignedUrl` (client)](#requestpresignedurlfiletype-metadata).
+File otomatis masuk ke folder `videos/` atau `audio/` (atur di `Config.Folders`).
+
+### 8. Dari resource JavaScript
+
+```js
+const R2 = exports["uhost-r2-redm-sdk"];
+
+onNet("myresource:capture", async () => {
+  const src = global.source;
+  try {
+    const res = await R2.takeServerImage(src, { reason: "js-example" });
+    console.log(`Screenshot: ${res.url}`);
+  } catch (err) {
+    console.error(err);
+  }
+});
+```
+
+## Log ke Discord
+
+Log upload dan hapus file **tidak perlu diatur di SDK**. Aktifkan per bucket di dashboard UHost R2:
+
+1. Di Discord: **Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL**.
+2. Di [r2.uhost.id](https://r2.uhost.id): buka bucket → **Discord webhook** → tempel URL → **Add webhook**.
+3. Klik **Send test** untuk memastikan pesannya masuk. Pilih event yang dikirim (**Upload** / **Delete**), dan matikan sementara lewat tombol **Active** kapan saja.
+
+Setiap log berisi nama file, ukuran, preview gambar, nama dan ID pemain, identifier, serta metadata yang kamu kirim (misalnya `reason` di contoh report). Log dari banyak upload sekaligus otomatis digabung supaya tidak terkena rate limit Discord.
+
 ## Konfigurasi (`config.lua`)
 
 | Opsi | Default | Keterangan |
