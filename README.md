@@ -336,7 +336,7 @@ Respons upload: `{ "status": "ok", "data": { "id": "...", "url": "https://..." }
 ## Batasan
 
 - Maksimum ukuran per file mengikuti server UHost R2 (default 500 MB). Lewat Cloudflare, satu request dibatasi 100 MB.
-- Rate limit per API key default 60 request/menit. Hubungi admin UHost kalau server kamu sering mengambil screenshot.
+- Rate limit diatur per API key di dashboard (**API Keys → ikon pensil**). Defaultnya 60 request/menit, dan kamu bisa menurunkannya sendiri. Untuk batas yang lebih tinggi, hubungi admin UHost. Satu screenshot lewat SDK memakai sekitar 3 request.
 
 ## Lisensi
 
