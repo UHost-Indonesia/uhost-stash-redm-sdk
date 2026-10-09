@@ -2,7 +2,7 @@
 
 > Sebelumnya bernama **UHost R2** (`uhost-r2-redm-sdk`). Kalau versi lama sudah terpasang, ganti nama folder resource menjadi `uhost-stash-redm-sdk`, ubah `ensure` di `server.cfg`, dan ganti `exports['uhost-r2-redm-sdk']` menjadi `exports['uhost-stash-redm-sdk']` di script kamu. Convar `uhost_api_key` tetap sama.
 
-Resource Lua untuk upload **screenshot, video, dan audio** dari server RedM ke **[UHost Stash](https://stash.uhost.id)**.
+Resource Lua untuk upload **screenshot, video, dan audio** dan mengirim **log server** dari RedM ke **[UHost Stash](https://stash.uhost.id)**.
 
 - Murni Lua, tanpa build step.
 - **API key hanya ada di server.** Client meng-upload langsung ke UHost Stash lewat *presigned URL* sekali pakai, jadi bandwidth server game tidak terpakai dan key tidak bocor ke pemain.
@@ -297,7 +297,52 @@ onNet("myresource:capture", async () => {
 });
 ```
 
-## Log ke Discord
+## Logs
+
+Kirim event dari server ke halaman **Logs** di dashboard UHost Stash, lalu cari dan filter per dataset, level, waktu, atau isi metadata (misalnya `license:abc123`). Log dikirim per batch di background, jadi `log()` tidak pernah menunggu jaringan.
+
+### `log(dataset, level, message, metadata?)` (server)
+
+- `dataset`: nama kelompok log, misalnya `inventory`, `economy`, `anticheat` (huruf kecil, angka, `_ . : -`).
+- `level`: `'debug'`, `'info'`, `'warn'`, atau `'error'`.
+- `metadata`: tabel bebas (maksimal 8 KB), ikut dicari oleh pencarian.
+
+```lua
+local Stash = exports['uhost-stash-redm-sdk']
+
+-- Contoh: log pembelian senjata
+Stash:log('inventory', 'info', ('%s membeli %s'):format(GetPlayerName(source), item), {
+    item = item,
+    price = price,
+    license = GetPlayerIdentifierByType(source, 'license'),
+})
+
+-- Contoh: transfer uang besar diberi level warn
+if amount >= 1000000 then
+    Stash:log('economy', 'warn', ('Transfer $%d dari %s'):format(amount, GetPlayerName(source)), { amount = amount, to = target })
+end
+```
+
+Nama resource pemanggil tersimpan otomatis di kolom **Resource**. `flushLogs()` mengirim semua log yang masih antre sekarang juga (blocking).
+
+### Log otomatis
+
+Atur di `Config.Logs` (`config.lua`):
+
+| Opsi | Default | Dataset | Isi |
+|---|---|---|---|
+| `playerJoins` | `true` | `joins` | pemain masuk dan keluar, lengkap dengan alasan keluar dan identifier |
+| `chat` | `false` | `chat` | pesan chat (resource `chat` bawaan) |
+| `txAdmin` | `true` | `txadmin` | kick, warn, ban, revoke, heal, DM, announcement, restart terjadwal, shutdown |
+
+### Alert dan retensi
+
+Di dashboard: **Logs → Settings**.
+
+- **Keep logs for**: lama penyimpanan, 1–90 hari (default 30).
+- **Discord alerts**: kirim log dengan level tertentu (misalnya hanya `error`) ke webhook Discord bucket, yang diatur di tab **Logging** bucket.
+
+## Log upload ke Discord
 
 Log upload dan hapus file **tidak perlu diatur di SDK**. Aktifkan per bucket di dashboard UHost Stash:
 
@@ -320,6 +365,10 @@ Setiap log berisi nama file, ukuran, preview gambar, nama dan ID pemain, identif
 | `Config.ClientCooldownMs` | `3000` | jeda minimum antar request dari satu pemain |
 | `Config.AppendPlayerInfo` | `true` | tambahkan info pemain ke metadata |
 | `Config.ExcludedIdentifiers` | `{ ip = true }` | identifier yang tidak disimpan |
+| `Config.Logs.flushIntervalMs` | `2000` | jeda pengiriman log yang antre |
+| `Config.Logs.batchSize` | `100` | jumlah log per request |
+| `Config.Logs.maxQueue` | `2000` | log yang ditahan saat API tidak bisa dihubungi |
+| `Config.Logs.playerJoins` / `chat` / `txAdmin` | `true` / `false` / `true` | log otomatis, lihat [Logs](#logs) |
 
 ## Upload langsung lewat HTTP
 
@@ -332,13 +381,14 @@ Resource lain juga bisa langsung memakai API UHost Stash tanpa SDK ini (misalnya
 | `GET https://stash.uhost.id/api/v3/file/presigned-url?fileType=image` | buat URL upload sekali pakai |
 | `GET https://stash.uhost.id/api/v3/file?type=image&path=screenshots` | daftar file |
 | `GET` / `DELETE https://stash.uhost.id/api/v3/file/<id atau key>` | detail / hapus file |
+| `POST https://stash.uhost.id/api/v3/logs` | kirim log JSON `{ logs: [{ dataset, level, message, metadata?, timestamp? }] }` (maksimal 500 per request) |
 
 Respons upload: `{ "status": "ok", "data": { "id": "...", "url": "https://..." } }`. Kalau API key tidak terikat ke satu bucket, tambahkan `?bucket=<nama>`.
 
 ## Batasan
 
 - Maksimum ukuran per file mengikuti server UHost Stash (default 500 MB). Lewat Cloudflare, satu request dibatasi 100 MB.
-- Rate limit diatur per API key di dashboard (**API Keys → ikon pensil**). Defaultnya 60 request/menit, dan kamu bisa menurunkannya sendiri. Untuk batas yang lebih tinggi, hubungi admin UHost. Satu screenshot lewat SDK memakai sekitar 3 request.
+- Rate limit diatur per API key di dashboard (**API Keys → ikon pensil**). Defaultnya 60 request/menit, dan kamu bisa menurunkannya sendiri. Untuk batas yang lebih tinggi, hubungi admin UHost. Satu screenshot lewat SDK memakai sekitar 3 request. Log dikirim per batch (sampai 100 log per request), jadi hemat kuota.
 
 ## Lisensi
 

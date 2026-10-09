@@ -35,3 +35,16 @@ Config.ExcludedIdentifiers = { ip = true }
 
 -- Max wait for client -> server requests
 Config.RpcTimeoutMs = 20000
+
+-- Logs (dashboard → Logs). exports[...]:log() is always available; logs are
+-- queued and sent in batches so a call never waits for the network.
+Config.Logs = {
+    flushIntervalMs = 2000, -- send queued logs this often
+    batchSize = 100,        -- or as soon as this many are queued
+    maxQueue = 2000,        -- kept while the API is unreachable (oldest dropped first)
+
+    -- Built-in event logs
+    playerJoins = true,     -- dataset "joins": joined / left (with the drop reason)
+    chat = false,           -- dataset "chat": chat messages (default chat resource)
+    txAdmin = true,         -- dataset "txadmin": kicks, warns, bans, announcements, restarts
+}

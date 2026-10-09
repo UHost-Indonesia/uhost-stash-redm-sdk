@@ -1,4 +1,5 @@
--- UHost Stash SDK (server): talks to the UHost Stash game API (/api/v3/file).
+-- UHost Stash SDK (server): talks to the UHost Stash game API (/api/v3/file
+-- for uploads, /api/v3/logs for logs).
 -- The API key lives only here (convar "uhost_api_key"); clients upload through
 -- one-time presigned URLs and never see it.
 
@@ -88,16 +89,20 @@ local function decodeJson(text)
     return nil
 end
 
-local function httpRequest(method, path, query, body, headers)
-    local key = GetConvar('uhost_api_key', '')
-    if key == '' then fail('convar "uhost_api_key" is not set in server.cfg') end
-
+local function requestUrl(path, query)
     query = query or {}
     local bucket = GetConvar('uhost_bucket', '')
     if bucket ~= '' and query.bucket == nil then query.bucket = bucket end
 
     local qs = buildQuery(query)
-    local url = apiUrl() .. path .. (qs ~= '' and ('?' .. qs) or '')
+    return apiUrl() .. path .. (qs ~= '' and ('?' .. qs) or '')
+end
+
+local function httpRequest(method, path, query, body, headers)
+    local key = GetConvar('uhost_api_key', '')
+    if key == '' then fail('convar "uhost_api_key" is not set in server.cfg') end
+
+    local url = requestUrl(path, query)
     headers = headers or {}
     headers['Authorization'] = key
 
@@ -121,15 +126,22 @@ local function toResult(file)
     return { status = 'ok', id = file.id, url = file.url, data = file }
 end
 
-local function playerInfo(src)
-    local info = { playerSource = src, playerName = GetPlayerName(src) }
+-- { license = 'license:...', discord = 'discord:...' } without excluded kinds
+local function filterIdentifiers(list)
     local identifiers = {}
-    for _, identifier in ipairs(GetPlayerIdentifiers(src) or {}) do
-        local kind = identifier:match('^([%w_]+):')
+    for _, identifier in ipairs(list or {}) do
+        local kind = type(identifier) == 'string' and identifier:match('^([%w_]+):')
         if kind and not Config.ExcludedIdentifiers[kind] then identifiers[kind] = identifier end
     end
-    info.identifiers = identifiers
-    return info
+    return identifiers
+end
+
+local function playerInfo(src)
+    return {
+        playerSource = src,
+        playerName = GetPlayerName(src),
+        identifiers = filterIdentifiers(GetPlayerIdentifiers(src)),
+    }
 end
 
 -- Fields from `trusted` win over `base`
@@ -252,6 +264,99 @@ local function deleteFile(id)
 end
 
 -- ---------------------------------------------------------------------------
+-- Logs (/api/v3/logs). log() only queues; a background thread sends the
+-- queue in batches. Network errors, rate limits and server errors are
+-- retried; a batch the API rejects (bad input, invalid key) is dropped.
+-- ---------------------------------------------------------------------------
+
+local LOG_LEVELS = { debug = 'debug', info = 'info', warn = 'warn', warning = 'warn', error = 'error' }
+local logQueue = {}
+local logSending = false
+local droppedLogs = 0
+
+local function log(dataset, level, message, metadata)
+    if type(dataset) ~= 'string' or dataset == '' then fail('log dataset must be a non-empty string') end
+    local lvl = LOG_LEVELS[tostring(level or 'info'):lower()]
+    if not lvl then fail('log level must be "debug", "info", "warn" or "error"') end
+    if message == nil or message == '' then fail('log message is required') end
+
+    if #logQueue >= Config.Logs.maxQueue then
+        table.remove(logQueue, 1)
+        droppedLogs = droppedLogs + 1
+    end
+    logQueue[#logQueue + 1] = {
+        dataset = dataset,
+        level = lvl,
+        message = tostring(message),
+        metadata = (type(metadata) == 'table' and next(metadata) ~= nil) and metadata or nil,
+        -- The resource that called the export (nil for this resource's own logs)
+        resource = GetInvokingResource() or RESOURCE,
+        timestamp = os.time(),
+    }
+    return true
+end
+
+-- Sends one batch; true when it was accepted
+local function sendLogBatch()
+    local key = GetConvar('uhost_api_key', '')
+    if logSending or #logQueue == 0 or key == '' then return false end
+    logSending = true
+
+    local count = math.min(#logQueue, Config.Logs.batchSize)
+    local batch = table.move(logQueue, 1, count, 1, {})
+    local p = promise.new()
+    PerformHttpRequest(requestUrl('/api/v3/logs'), function(status, _, _, errorData)
+        p:resolve({ status = status, error = errorData })
+    end, 'POST', json.encode({ logs = batch }), { ['Content-Type'] = 'application/json', ['Authorization'] = key })
+    local res = Citizen.Await(p)
+    logSending = false
+
+    local ok = res.status >= 200 and res.status < 300
+    if not ok and (res.status == 0 or res.status == 429 or res.status >= 500) then
+        debugLog(('log upload failed (%s), retrying later'):format(tostring(res.status)))
+        return false
+    end
+    -- Logs queued while this request was running stay in the queue
+    logQueue = table.move(logQueue, count + 1, #logQueue, 1, {})
+    if not ok then
+        print(('^3[%s] %d logs rejected (HTTP %s): %s^7'):format(RESOURCE, count, tostring(res.status), tostring(res.error):sub(1, 300)))
+    end
+    return ok
+end
+
+-- Sends everything queued now (blocks); false if something could not be sent
+local function flushLogs()
+    while #logQueue > 0 do
+        if logSending then
+            Wait(50)
+        elseif not sendLogBatch() then
+            return false
+        end
+    end
+    return true
+end
+
+CreateThread(function()
+    local lastSent = GetGameTimer()
+    while true do
+        Wait(250)
+        local due = GetGameTimer() - lastSent >= Config.Logs.flushIntervalMs
+        if #logQueue > 0 and (due or #logQueue >= Config.Logs.batchSize) then
+            lastSent = GetGameTimer()
+            local ok, err = pcall(sendLogBatch)
+            if not ok then
+                logSending = false
+                debugLog('log upload error: ' .. tostring(err))
+            end
+        end
+        if droppedLogs > 0 then
+            print(('^3[%s] %d logs dropped: the queue was full (is the API reachable?)^7'):format(RESOURCE, droppedLogs))
+            droppedLogs = 0
+        end
+    end
+end)
+
+-- ---------------------------------------------------------------------------
 -- Exports: blocking in Lua (yields the calling thread), a Promise in JS.
 -- Passing a function as the last argument switches to callback(result, err).
 -- ---------------------------------------------------------------------------
@@ -278,6 +383,9 @@ export('uploadFile', uploadImage)
 export('getFile', getFile)
 export('listFiles', listFiles)
 export('deleteFile', deleteFile)
+-- Logs
+export('log', log)
+export('flushLogs', flushLogs)
 
 -- ---------------------------------------------------------------------------
 -- Client bridge
@@ -332,6 +440,83 @@ end)
 
 AddEventHandler('playerDropped', function()
     lastClientRequest[source] = nil
+end)
+
+-- ---------------------------------------------------------------------------
+-- Built-in event logs (Config.Logs)
+-- ---------------------------------------------------------------------------
+
+local function playerLabel(src)
+    return GetPlayerName(src) or ('player ' .. tostring(src))
+end
+
+local function safeLog(dataset, level, message, metadata)
+    local ok, err = pcall(log, dataset, level, message, metadata)
+    if not ok then debugLog('log failed: ' .. tostring(err)) end
+end
+
+if Config.Logs.playerJoins then
+    AddEventHandler('playerJoining', function()
+        local src = source
+        safeLog('joins', 'info', playerLabel(src) .. ' joined', playerInfo(src))
+    end)
+
+    AddEventHandler('playerDropped', function(reason)
+        local src = source
+        local info = playerInfo(src)
+        info.reason = reason
+        safeLog('joins', 'info', ('%s left (%s)'):format(playerLabel(src), tostring(reason or 'unknown')), info)
+    end)
+end
+
+if Config.Logs.chat then
+    AddEventHandler('chatMessage', function(src, author, text)
+        if type(text) ~= 'string' or text == '' then return end
+        local info = playerInfo(src)
+        info.text = text
+        safeLog('chat', 'info', ('%s: %s'):format(author or playerLabel(src), text), info)
+    end)
+end
+
+-- txAdmin server events (txAdmin:events:*).
+-- The event data goes into the metadata; identifiers are filtered like
+-- everywhere else.
+local function txTarget(data)
+    if data.targetName then return data.targetName end
+    local id = data.target or data.targetNetId
+    if not id or id == -1 then return 'everyone' end
+    return GetPlayerName(id) or ('player ' .. tostring(id))
+end
+
+local TXADMIN_EVENTS = {
+    playerKicked = { 'warn', function(d) return ('%s was kicked by %s: %s'):format(txTarget(d), d.author or 'txAdmin', d.reason or '-') end },
+    playerWarned = { 'warn', function(d) return ('%s was warned by %s: %s'):format(txTarget(d), d.author or 'txAdmin', d.reason or '-') end },
+    playerBanned = { 'error', function(d)
+        return ('%s was banned by %s (%s): %s'):format(txTarget(d), d.author or 'txAdmin', d.durationTranslated or 'permanent', d.reason or '-')
+    end },
+    actionRevoked = { 'info', function(d) return ('%s revoked %s %s'):format(d.revokedBy or 'an admin', d.actionType or 'action', d.actionId or '') end },
+    playerHealed = { 'info', function(d) return txTarget(d) .. ' healed by txAdmin' end },
+    playerDirectMessage = { 'info', function(d) return ('DM from %s to %s: %s'):format(d.author or 'txAdmin', txTarget(d), d.message or '') end },
+    announcement = { 'info', function(d) return ('Announcement by %s: %s'):format(d.author or 'txAdmin', d.message or '') end },
+    scheduledRestart = { 'warn', function(d) return 'Scheduled restart in ' .. tostring(d.translatedMessage or ((d.secondsRemaining or '?') .. ' seconds')) end },
+    serverShuttingDown = { 'warn', function(d) return ('Server shutting down (%s)'):format(d.author or 'txAdmin') end },
+}
+
+if Config.Logs.txAdmin then
+    for name, def in pairs(TXADMIN_EVENTS) do
+        AddEventHandler('txAdmin:events:' .. name, function(data)
+            data = type(data) == 'table' and data or {}
+            local metadata = mergeTables(data, { event = name })
+            if type(data.targetIds) == 'table' then metadata.targetIds = filterIdentifiers(data.targetIds) end
+            local ok, message = pcall(def[2], data)
+            safeLog('txadmin', def[1], ok and message or name, metadata)
+        end)
+    end
+end
+
+-- Best effort: send what is queued when the resource or server stops
+AddEventHandler('onResourceStop', function(name)
+    if name == RESOURCE and #logQueue > 0 then CreateThread(flushLogs) end
 end)
 
 CreateThread(function()
