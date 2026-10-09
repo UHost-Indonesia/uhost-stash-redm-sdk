@@ -1,4 +1,4 @@
--- UHost R2 SDK (client): screenshots via screenshot-basic, uploaded straight to the API
+-- UHost Stash SDK (client): screenshots via screenshot-basic, uploaded straight to the API
 -- with one-time URLs issued by the server (the API key never reaches clients).
 
 local RESOURCE = GetCurrentResourceName()

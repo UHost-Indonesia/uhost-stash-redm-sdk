@@ -1,4 +1,4 @@
--- UHost R2 SDK (server): talks to the UHost R2 game API (/api/v3/file).
+-- UHost Stash SDK (server): talks to the UHost Stash game API (/api/v3/file).
 -- The API key lives only here (convar "uhost_api_key"); clients upload through
 -- one-time presigned URLs and never see it.
 
@@ -23,7 +23,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local function apiUrl()
-    return (GetConvar('uhost_api_url', 'https://r2.uhost.id'):gsub('/+$', ''))
+    return (GetConvar('uhost_api_url', 'https://stash.uhost.id'):gsub('/+$', ''))
 end
 
 local function urlEncode(value)
